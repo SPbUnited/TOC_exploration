@@ -16,5 +16,5 @@ make up-py # or: python control_decoder_example.py
 ```bash
 cd cpp
 make init
-make up-cpp # or: ./main.out
+make up-cpp # or: make all && ./main.out
 ```

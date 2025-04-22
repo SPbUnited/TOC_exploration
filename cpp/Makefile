@@ -42,6 +42,29 @@ BIRED=\033[1;91m
 
 NC=\033[0m # No Color
 
+CPP			    = g++
+RM			    = rm -f
+CPPFLAGS		= -Wall -I. -O2 -std=c++17 -g
+LDFLAGS			= -lpthread -lzmqpp -lzmq -Wl,--no-as-needed
+SOURCES			= $(wildcard *.cpp)
+TARGETS			= $(SOURCES:%.cpp=%)
+
+all:	${TARGETS}
+
+clean:
+	${RM} *.o *~* ${TARGETS}.out ${TARGETS}.d
+
+${TARGETS}:
+	${CPP} ${CPPFLAGS} -o $@.out ${@:%=%.cpp} ${LDFLAGS}
+
+up-cpp: up-message all
+	./main.out
+
+up-message:
+	@echo "${PURPLE}============="
+	@echo "|    UP     |"
+	@echo "=============${NC}"
+
 init: init_cpp
 	# @echo "\n${YELLOW}Don't forget to do ${WHITE}source venv/bin/activate${NC}"
 	# @echo "                   ~~~~~~~~~~~~~~~~~~~~~~~~"
@@ -64,26 +87,3 @@ init_cpp:
 	cd zmqpp && \
 	make && \
 	sudo make install
-
-CPP			    = g++
-RM			    = rm -f
-CPPFLAGS		= -Wall -I. -O2 -std=c++17 -g
-LDFLAGS			= -lpthread -lzmqpp -lzmq -Wl,--no-as-needed
-SOURCES			= $(wildcard *.cpp)
-TARGETS			= $(SOURCES:%.cpp=%)
-
-all:	clean ${TARGETS}
-
-clean:
-	${RM} *.obj *~* ${TARGETS}
-
-${TARGETS}:
-	${CPP} ${CPPFLAGS} -o $@.out ${@:%=%.cpp} ${LDFLAGS}
-
-up-cpp: up-message all
-	./main
-
-up-message:
-	@echo "${PURPLE}============="
-	@echo "|    UP     |"
-	@echo "=============${NC}"
