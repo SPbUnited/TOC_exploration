@@ -1,3 +1,5 @@
 zmq
 attrs
 cattrs
+numpy
+scipy

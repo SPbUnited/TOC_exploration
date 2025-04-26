@@ -6,6 +6,12 @@ import robot_command_model as rcm
 import tracker_model as tm
 
 import math
+from scipy.optimize import root, least_squares
+import numpy as np
+
+from aux import Point
+
+#import time
 
 context = zmq.Context()
 s_tracker = context.socket(zmq.SUB)
@@ -15,38 +21,277 @@ s_tracker.setsockopt_string(zmq.SUBSCRIBE, "")
 s_control = context.socket(zmq.PUB)
 s_control.connect("ipc:///tmp/ether.signals.xsub")
 
+s_draw = context.socket(zmq.PUB)
+s_draw.connect("ipc:///tmp/ether.draw.xsub")
+
 print("Control decoder example")
 
 last_frame_number = 0
 
+time = 0
 
 @define
 class Robot:
-    target_x: float
-    target_y: float
-    target_angle: float
 
-    kp: float
-    kpa: float
+    points: list[Point]
+    velocities: list[Point]
+    current_start: int
+    current_goal: int
+    EPS = 0.1
+    alpha = 0.7
+    COORD_EPS = 0.1
+    SPEED_EPS = 0.5
+    trajectory: list[Point] = []
+    trajectory_max_len = 100
+    trajectory_update_int = 15
+    update_counter: int = 0
+    MAX_SPEED = 2
+    MAX_ACC = 1
 
-    def update(self, x, y, angle):
-        req_glob_vel_x = self.kp * (self.target_x - x)
-        req_glob_vel_y = self.kp * (self.target_y - y)
-        req_vel_x = math.cos(angle) * req_glob_vel_y - math.sin(angle) * req_glob_vel_x
-        req_vel_y = math.sin(angle) * req_glob_vel_y + math.cos(angle) * req_glob_vel_x
+    def update(self, x, y, angle, vel_x, vel_y, vel_angular):
+        pos = Point(x, y)
+        vel = Point(vel_x, vel_y)
 
-        req_vel_w = (self.target_angle - angle) % (2 * math.pi) * self.kpa
-        return req_vel_x, req_vel_y, req_vel_w
+        #if(pos - self.points[self.current_goal]).mag() < self.COORD_EPS and (vel - self.velocities[self.current_goal]).mag() < self.SPEED_EPS:
+        err = self.alpha*(pos - self.points[self.current_goal]).mag() + (1 - self.alpha)*(vel - self.velocities[self.current_goal]).mag() 
+        print(err)
+        if err < self.EPS:
+            self.current_start = self.current_goal
+            self.current_goal = (self.current_goal + 1)%len(self.points)
+
+        self.update_counter += 1
+        if self.update_counter > self.trajectory_update_int:
+            self.update_counter = 0
+            self.trajectory.append(pos)
+            if len(self.trajectory) > self.trajectory_max_len:
+                self.trajectory.pop(0)
+
+        draw_points_data = {
+            "points": {
+                "data": [ 
+                    {
+                        "type": "circle",
+                        "x": p.x*1000,
+                        "y": -p.y*1000,
+                        "radius": 50,
+                        "color": "#0000FF" if p == self.points[self.current_goal] else "#FF0000",
+                    } for p in self.points],
+                "is_visible": True,
+            }
+        }
+        draw_speeds_data = {
+            "speeds": {
+                "data": [
+                    {
+                        "type": "arrow",
+                        "x": z[0].x*1000,
+                        "y": -z[0].y*1000,
+                        "dx": z[1].x*1000,
+                        "dy": -z[1].y*1000,
+                        "color": "#0000FF" if z[0] == self.points[self.current_goal] else "#FF0000",
+                        "width": 20,
+                    }  for z in zip(self.points, self.velocities)],
+                "is_visible": True,
+            }
+        }
+        #s_draw.send_json(draw_points_data)
+        #s_draw.send_json(draw_speeds_data)
+        draw_trajectory_data = {
+                "trajectory": {
+                    "data": [
+                        {
+                            "type": "line",
+                            "x_list": [p.x*1000 for p in self.trajectory],
+                            "y_list": [-p.y*1000 for p in self.trajectory],
+                            "color": "#888888",
+                            "width": 10,
+                        },
+                    ],
+                    "is_visible": True,
+                }
+            }
+        #s_draw.send_json(draw_trajectory_data)
+
+        return self.bangbang(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
+        # return self.tocorba(pos.x, pos.y, angle)
 
 
-robot = Robot(target_x=3, target_y=-2, target_angle=2, kp=1, kpa=1)
+    def bangbang(self, pos, goal, vel, vel_goal, angle):
+        v_max = self.max_vel_bang_bang(pos, goal, vel, vel_goal)
+        T = self.get_bang_bang_time(pos, goal, v_max, vel, vel_goal)
+        
+        plan = []
+        for t in range(0, 20, 1):
+            values = self.get_bang_bang_values(pos, goal, v_max, T/20*t, vel, vel_goal)
+            plan.append(values[2])
+
+        draw_planned_data = {
+                "plan": {
+                    "data": [
+                        {
+                            "type": "line",
+                            "x_list": [p.x*1000 for p in plan],
+                            "y_list": [-p.y*1000 for p in plan],
+                            "color": "#FF00FF",
+                            "width": 10,
+                        },
+                    ],
+                    "is_visible": True,
+                }
+            }
+        #s_draw.send_json(draw_planned_data)
+
+        values = self.get_bang_bang_values(pos, goal, v_max, 0.07, vel, vel_goal)
+        return values[1].y, values[1].x, -angle*2
+    
+    def short_dist(self, v_max: np.ndarray, args: list) -> np.ndarray:
+        """Поиск короткого решения"""
+        v_start = args[0]
+        v_end = args[1]
+        delta_r = args[2]
+        a_max = args[3]
+        return (
+            2 * a_max * delta_r
+            - (v_max + v_start) * np.linalg.norm(v_max - v_start)
+            - (v_max + v_end) * np.linalg.norm(v_max - v_end)
+        )
+
+
+    def long_dist(self, ang: np.ndarray, args: list) -> np.ndarray:
+        """Поиск длинного решения"""
+        max_speed = args[0]
+        v_start = args[1]
+        v_end = args[2]
+        delta_r = args[3]
+        a_max = args[4]
+        v_max = np.array([max_speed * np.cos(ang[0]), max_speed * np.sin(ang[0])])
+        val = (
+            2 * a_max * np.array(delta_r)
+            - (v_max + v_start) * np.linalg.norm(v_max - v_start)
+            - (v_max + v_end) * np.linalg.norm(v_max - v_end)
+        )
+        return np.array([(val[0] * v_max[0] + val[1] * v_max[1]) / np.linalg.norm(val) / np.linalg.norm(v_max) - 1])
+
+    def max_vel_bang_bang(
+        self,
+        r_start: Point,
+        r_end: Point,
+        v_start: Point = Point(0, 0),
+        v_end: Point = Point(0, 0),
+        max_speed: float = MAX_SPEED,
+        a_max: float = MAX_ACC,
+        ) -> Point:
+        """Найти макс. скорость бенг-бенга, однозначно его задает"""
+        delta_r = r_end - r_start
+        v_max_initial = np.array([0, 0])
+        if delta_r.mag() != 0:
+            v_max_initial = np.array([delta_r.x, delta_r.y]) / delta_r.mag() * max_speed
+        args = [np.array([v_start.x, v_start.y]), np.array([v_end.x, v_end.y]), np.array([delta_r.x, delta_r.y]), a_max]
+        short_solution = root(self.short_dist, v_max_initial, args=args)
+
+        if not short_solution.success:
+            short_solution = least_squares(self.short_dist, v_max_initial, method="lm", args=[args])
+
+        v_max = Point(short_solution.x[0], short_solution.x[1])
+
+        if v_max.mag() > max_speed:
+            args.insert(0, max_speed)
+            ang_initial = np.array([delta_r.arg()])
+            long_solution = root(self.long_dist, ang_initial, args=args)
+            if not long_solution.success:
+                long_solution = least_squares(self.long_dist, ang_initial, method="lm", args=[args])
+            angle = long_solution.x[0]
+            v_max = Point(max_speed * np.cos(angle), max_speed * np.sin(angle))
+
+        return v_max
+
+    def get_bang_bang_time(
+        self,
+        r_start: Point,
+        r_end: Point,
+        v_max: Point,
+        v_start: Point = Point(0, 0),
+        v_end: Point = Point(0, 0),
+        max_speed: float = MAX_SPEED,
+        a_max: float = MAX_ACC,
+        ) -> float:
+        """Найти время проезда по бенг-бенгу"""
+        return (
+            (v_max - v_start).mag() / a_max
+            + (
+                r_end
+                - r_start
+                - ((v_max + v_start) * (v_max - v_start).mag() + (v_end + v_max) * (v_end - v_max).mag()) / 2 / a_max
+            ).mag()
+            / max_speed
+            + (v_end - v_max).mag() / a_max
+        )
+
+    def get_bang_bang_values(
+        self,
+        r_start: Point,
+        r_end: Point,
+        v_max: Point,
+        t: float,
+        v_start: Point = Point(0, 0),
+        v_end: Point = Point(0, 0),
+        max_speed: float = MAX_SPEED,
+        a_max: float = MAX_ACC,
+    ) -> list[Point]:
+        """Возвращает кинематические величины в любой момент проезда по бенг-бенгу"""
+        p1 = r_start + (v_max + v_start) * (v_max - v_start).mag() / 2 / a_max
+        p2 = r_end - (v_end + v_max) * (v_end - v_max).mag() / 2 / a_max
+        t1 = (v_max - v_start).mag() / a_max
+        t2 = t1 + (p2 - p1).mag() / max_speed
+        t3 = t2 + (v_end - v_max).mag() / a_max
+        values: list[Point] = []
+        if t < 0:
+            values.append((v_max - v_start).unity() * a_max)
+            values.append(v_start)
+            values.append(r_start)
+        if t < t1:
+            values.append((v_max - v_start).unity() * a_max)
+            values.append(v_start + values[0] * t)
+            values.append(r_start + v_start * t + values[0] * t**2 / 2)
+        elif t < t2:
+            values.append(Point(0, 0))
+            values.append(v_max)
+            values.append(p1 + v_max * (t - t1))
+        elif t < t3:
+            values.append((v_end - v_max).unity() * a_max)
+            values.append(v_max + values[0] * (t - t2))
+            values.append(p2 + v_max * (t - t2) + values[0] * (t - t2) ** 2 / 2)
+        else:
+            values.append((v_end - v_max).unity() * a_max)
+            values.append(v_end)
+            values.append(r_end)
+        return values
+
+
+    def tocorba(self, pos, goal, vel, vel_goal, angle):
+        T_max = (vel + vel_goal).mag()/self.MAX_ACC 
+        + 2*math.sqrt((goal - pos).mag()/self.MAX_ACC - (vel*vel + vel_goal*vel_goal).mag/(2*self.MAX_ACC*self.MAX_ACC))
+
+        dVector = goal - pos
+
+        #vel_proj = 
+
+        return #req_vel_x, req_vel_y, req_vel_w
+
+
+robot = Robot(points = [Point(-1.5, -0.12), Point(-1, 0.12), Point(-0.5, -0.12), Point(0, 0.12), Point(1, 0), Point(0, 1), Point(-3, 2)],
+              velocities = [Point(0, 0), Point(0.2, 0), Point(0.2, 0), Point(0.2, 0), Point(0.3, 0.4), Point(0.3, 0.4), Point(-0.5, -0.2)],
+              current_start = 0,
+              current_goal = 1)
 
 while True:
     print(".")
     tracker_data = structure(s_tracker.recv_json(), tm.TrackerWrapperPacket)
+    time = tracker_data.tracked_frame.timestamp
+    # print(tracker_data.tracked_frame.timestamp)
     print(tracker_data.tracked_frame.frame_number)
-    print(tracker_data.tracked_frame.frame_number - last_frame_number)
-    print(tracker_data.tracked_frame.robots[0])
+    # print(tracker_data.tracked_frame.frame_number - last_frame_number)
+    # if len(tracker_data.tracked_frame.robots) > 0: print(tracker_data.tracked_frame.robots[0])
 
     last_frame_number = tracker_data.tracked_frame.frame_number
 
@@ -63,6 +308,9 @@ while True:
         tracked_robot.pos.x,
         tracked_robot.pos.y,
         tracked_robot.orientation,
+        tracked_robot.vel.x,
+        tracked_robot.vel.y,
+        tracked_robot.vel_angular,
     )
 
     control_data = rcm.RobotControlExt(
@@ -82,11 +330,11 @@ while True:
                         left=req_vel_x,
                         angular=req_vel_w,
                     ),
-                    # global_velocity=rcm.MoveGlobalVelocity(
-                    #     x=1,
-                    #     y=0,
-                    #     angular=0,
-                    # ),
+                    #global_velocity=rcm.MoveGlobalVelocity(
+                    #    x=req_vel_x,
+                    #    y=req_vel_y,
+                    #    angular=req_vel_w,
+                    #),
                 ),
                 kick_speed=0,
                 kick_angle=0,
