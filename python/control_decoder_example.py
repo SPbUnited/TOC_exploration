@@ -53,10 +53,7 @@ while True:
     tracked_robot = None
 
     for r in tracker_data.tracked_frame.robots:
-        if (
-            r.robot_id.team_color == tm.TeamColor.TEAM_COLOR_YELLOW
-            and r.robot_id.id == 0
-        ):
+        if r.robot_id.team == tm.Team.YELLOW and r.robot_id.id == 0:
             tracked_robot = r
 
     if tracked_robot is None:

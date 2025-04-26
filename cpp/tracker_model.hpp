@@ -8,18 +8,18 @@ using json = nlohmann::json;
 
 namespace trackerModel {
 
-enum class TeamColor {
-    TEAM_COLOR_UNKNOWN = 0,
-    TEAM_COLOR_YELLOW = 1,
-    TEAM_COLOR_BLUE = 2
+enum class Team {
+    UNKNOWN = 0,
+    YELLOW = 1,
+    BLUE = 2
 };
 
-void to_json(json& j, const TeamColor& tc) {
+void to_json(json& j, const Team& tc) {
     j = static_cast<int>(tc);
 }
 
-void from_json(const json& j, TeamColor& tc) {
-    tc = static_cast<TeamColor>(j.get<int>());
+void from_json(const json& j, Team& tc) {
+    tc = static_cast<Team>(j.get<int>());
 }
 
 enum class Capability {
@@ -69,16 +69,16 @@ void from_json(const json& j, Vector3& v) {
 
 struct RobotId {
     uint32_t id;
-    TeamColor team_color;
+    Team team;
 };
 
 void to_json(json& j, const RobotId& r) {
-    j = json{{"id", r.id}, {"team_color", r.team_color}};
+    j = json{{"id", r.id}, {"team", r.team}};
 }
 
 void from_json(const json& j, RobotId& r) {
     j.at("id").get_to(r.id);
-    j.at("team_color").get_to(r.team_color);
+    j.at("team").get_to(r.team);
 }
 
 struct TrackedBall {
