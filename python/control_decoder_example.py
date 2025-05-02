@@ -272,6 +272,8 @@ class Robot:
     def tocorba(self, pI, pF, vI, vF, angle):
         dP = pF - pI
         dP_np = np.array([dP.x, dP.y])
+        pI_np = np.array([pI.x, pI.y])
+        pF_np = np.array([pF.x, pF.y])
         vI_np = np.array([vI.x, vI.y])
         vF_np = np.array([vF.x, vF.y])
 
@@ -290,28 +292,42 @@ class Robot:
         a_init.append(1 / (Umax*math.sin(theta)*(T - tt) + vF_proj*math.sin(theta)))
         a_init.append(-a_init[2]*tt)
 
-        T_max = (vI + vF).mag()/self.MAX_ACC 
-        + 2*math.sqrt((pF - pI).mag()/self.MAX_ACC - (vI**2 + vF**2).mag()/(2*self.MAX_ACC**2))
+        Tmax = (vI + vF).mag()/Umax \
+        + 2*math.sqrt((pF - pI).mag()/Umax - (vI**2 + vF**2).mag()/(2*Umax**2))
 
-        args = [pI, pF, vI, vF, T_max]
-        a = least_squares(self.tocorba_calc_cost, a_init, method="lm", args=args)
+        print(pI)
+        print(pF)
+        print(vI)
+        print(vF)
+        print(Tmax)
+        print(a_init)
 
-        vTx, xTx = self.get_tocorba_vel_pos(vI.x, pI.x, a, T, a[0], a[2])
-        vTy, xTy = self.get_tocorba_vel_pos(vI.y, pI.y, a, T, a[1], a[3])
+        args_1 = [pI_np, pF_np, vI_np, vF_np, Tmax]
+        solution = least_squares(self.tocorba_calc_cost_1, a_init, method="trf", args=args_1)
 
-        vT = np.array([vTx, vTy])
-        xT = np.array([xTx, xTy])
+        a_1 = solution.x
+        print(solution)
+
+        a_init_2 = [a_1[0], a_1[1], a_1[2], a_1[3], Tmax]
+        args_2 = [pI_np, pF_np, vI_np, vF_np]
+        solution = least_squares(self.tocorba_calc_cost_2, a_init_2, method="trf", args=args_2)
+
+        a = solution.x
+        print(solution)
+
+        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, a, Tmax)
+
+        print(xT, vT, a[4])
 
         draw_tocorba_F = {
             "tocorba prediction": {
-                "data": [ 
-                    {
+                "data":{
                         "type": "circle",
-                        "x": p.x*1000,
-                        "y": -p.y*1000,
+                        "x": xT[0]*1000,
+                        "y": -xT[1]*1000,
                         "radius": 150,
                         "color": "#FFFFFF",
-                    } for p in self.points],
+                    },
                 "is_visible": True,
             }
         }
@@ -320,18 +336,24 @@ class Robot:
         return #req_vel_x, req_vel_y, req_vel_w
     
 
-    def tocorba_calc_cost(self, a, xI, xF, vI, vF, T):
+    def tocorba_calc_cost_2(self, a, xI, xF, vI, vF):
+        # print("CALC COST_2")
+        return self.tocorba_calc_cost_1(a, xI, xF, vI, vF, a[4])
 
-        vTx, xTx = self.get_tocorba_vel_pos(vI.x, xI.x, a, T, a[0], a[2])
-        vTy, xTy = self.get_tocorba_vel_pos(vI.y, xI.y, a, T, a[1], a[3])
 
-        vT = np.array([vTx, vTy])
-        xT = np.array([xTx, xTy])
-
-        return linalg.norm(xF - xT)**2 + linalg.norm(vF - vT)**2
+    def tocorba_calc_cost_1(self, a, xI, xF, vI, vF, T):
+        # print("CALC COST_1")
+        try:
+            vT, xT = self.get_tocorba_vel_pos(xI, vI, a, T)
+            cost = linalg.norm(xF - xT)**2 + linalg.norm(vF - vT)**2
+        except:
+            return 1e18
+        # print(cost)
+        return cost
 
 
     def calc_1DOF_optimal_times(self, xI, xF, vI, vF, Umax):
+        print("CALC 1_DOF")
         type = 1
         tt = -(2*vI - math.sqrt(2)*math.sqrt(vF**2 + vI**2 + 2*Umax*xF - 2*Umax*xI))/(2*Umax)
         T = (vI - vF + 2*Umax*tt)/Umax
@@ -344,37 +366,49 @@ class Robot:
         return T, tt
 
 
-    def get_tocorba_vel_pos(self, vI, xI, a, t, aa1, aa3):
+    def get_tocorba_vel_pos(self, xI, vI, a, t):
+        # print("CALC VELOCITY AND POSITION")
         a1 = a[0]
         a2 = a[1]
         a3 = a[2]
         a4 = a[3]
 
-        p = np.array([aa3, a4])
-        q = np.array([aa1, a2])
+        p = np.array([a3, a4])
+        q = np.array([a1, a2])
         psi3 = a1*t + a3
         psi4 = a2*t + a4
         h1 = math.sqrt(psi3**2 + psi4**2)
         h2 = h1*linalg.norm(q) + linalg.norm(q)*t**2 + np.dot(p, q)
         h3 = linalg.norm(p)*linalg.norm(q) + np.dot(p, q)
+        # print("a=" + str(a))
+        # print("h2=" + str(h2), "; h3=" + str(h3))
+        # print("p=" + str(p), "; q=" + str(q))
+        # print(linalg.norm(p), linalg.norm(q))
+        # print(linalg.norm(p)*linalg.norm(q), np.dot(p, q))
         gamma = h2/h3
+        # print(gamma)
 
-        print(a)
-        print(aa1)
-        print(aa3)
+        vtx, xtx = self.calc_tocorba_vel_pos(xI[0], vI[0], t, a1, a2, p, q, h1, gamma)
+        p = np.array([a4, a3])
+        q = np.array([a2, a1])
+        vty, xty = self.calc_tocorba_vel_pos(xI[1], vI[1], t, a2, a1, p, q, h1, gamma)
 
+        v = np.array([vtx, vty])
+        x = np.array([xtx, xty])
+        return v, x
+    
+    def calc_tocorba_vel_pos(self, xI, vI, t, a1, a2, p, q, h1, gamma):
         v = vI \
-            + aa1*(h1 - linalg.norm(p))/(linalg.norm(q)**2) \
+            + a1*(h1 - linalg.norm(p))/(linalg.norm(q)**2) \
             + a2*linalg.det([p, q])/(linalg.norm(q)**3)*math.log(gamma)
-        
         x = xI \
             + vI*t \
-            + aa1/(2*linalg.norm(q)**5) * (h1*(linalg.norm(q)*np.dot(p, q) + t*linalg.norm(q)**3) \
+            + a1/(2*linalg.norm(q)**5) * (h1*(linalg.norm(q)*np.dot(p, q) + t*linalg.norm(q)**3) \
             + linalg.norm(np.cross(p, q))**2*math.log(gamma) \
             - linalg.norm(p) * (linalg.norm(q)*np.dot(p, q) + 2*t*linalg.norm(q)**3)) \
             + a2*linalg.det([p, q])/linalg.norm(q)**3 * (math.log(gamma) * (t + np.dot(p, q)/linalg.norm(q)**2) - (h1 - linalg.norm(p))/linalg.norm(q))
-
         return v, x
+
 
 
 
