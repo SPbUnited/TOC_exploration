@@ -8,6 +8,7 @@ import tracker_model as tm
 import math
 from scipy.optimize import root, least_squares
 import numpy as np
+from numpy import linalg
 
 from aux import Point
 
@@ -52,7 +53,6 @@ class Robot:
         pos = Point(x, y)
         vel = Point(vel_x, vel_y)
 
-        #if(pos - self.points[self.current_goal]).mag() < self.COORD_EPS and (vel - self.velocities[self.current_goal]).mag() < self.SPEED_EPS:
         err = self.alpha*(pos - self.points[self.current_goal]).mag() + (1 - self.alpha)*(vel - self.velocities[self.current_goal]).mag() 
         print(err)
         if err < self.EPS:
@@ -94,8 +94,8 @@ class Robot:
                 "is_visible": True,
             }
         }
-        #s_draw.send_json(draw_points_data)
-        #s_draw.send_json(draw_speeds_data)
+        s_draw.send_json(draw_points_data)
+        s_draw.send_json(draw_speeds_data)
         draw_trajectory_data = {
                 "trajectory": {
                     "data": [
@@ -110,10 +110,11 @@ class Robot:
                     "is_visible": True,
                 }
             }
-        #s_draw.send_json(draw_trajectory_data)
+        s_draw.send_json(draw_trajectory_data)
 
+        self.tocorba(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
         return self.bangbang(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
-        # return self.tocorba(pos.x, pos.y, angle)
+        
 
 
     def bangbang(self, pos, goal, vel, vel_goal, angle):
@@ -139,7 +140,7 @@ class Robot:
                     "is_visible": True,
                 }
             }
-        #s_draw.send_json(draw_planned_data)
+        s_draw.send_json(draw_planned_data)
 
         values = self.get_bang_bang_values(pos, goal, v_max, 0.07, vel, vel_goal)
         return values[1].y, values[1].x, -angle*2
@@ -268,15 +269,113 @@ class Robot:
         return values
 
 
-    def tocorba(self, pos, goal, vel, vel_goal, angle):
-        T_max = (vel + vel_goal).mag()/self.MAX_ACC 
-        + 2*math.sqrt((goal - pos).mag()/self.MAX_ACC - (vel*vel + vel_goal*vel_goal).mag/(2*self.MAX_ACC*self.MAX_ACC))
+    def tocorba(self, pI, pF, vI, vF, angle):
+        dP = pF - pI
+        dP_np = np.array([dP.x, dP.y])
+        vI_np = np.array([vI.x, vI.y])
+        vF_np = np.array([vF.x, vF.y])
 
-        dVector = goal - pos
+        vI_proj = np.dot(vI_np, dP_np) / np.dot(dP_np, dP_np)
+        vF_proj = np.dot(vF_np, dP_np) / np.dot(dP_np, dP_np)
 
-        #vel_proj = 
+        theta = math.atan2(dP.y, dP.x)
+
+        Umax = self.MAX_ACC
+
+        T, tt = self.calc_1DOF_optimal_times(0, linalg.norm(dP_np), vI_proj, vF_proj, Umax)
+
+        a_init = []
+        a_init.append(1 / (Umax*math.cos(theta)*(T - tt) + vF_proj*math.cos(theta)))
+        a_init.append(-a_init[0]*tt)
+        a_init.append(1 / (Umax*math.sin(theta)*(T - tt) + vF_proj*math.sin(theta)))
+        a_init.append(-a_init[2]*tt)
+
+        T_max = (vI + vF).mag()/self.MAX_ACC 
+        + 2*math.sqrt((pF - pI).mag()/self.MAX_ACC - (vI**2 + vF**2).mag()/(2*self.MAX_ACC**2))
+
+        args = [pI, pF, vI, vF, T_max]
+        a = least_squares(self.tocorba_calc_cost, a_init, method="lm", args=args)
+
+        vTx, xTx = self.get_tocorba_vel_pos(vI.x, pI.x, a, T, a[0], a[2])
+        vTy, xTy = self.get_tocorba_vel_pos(vI.y, pI.y, a, T, a[1], a[3])
+
+        vT = np.array([vTx, vTy])
+        xT = np.array([xTx, xTy])
+
+        draw_tocorba_F = {
+            "tocorba prediction": {
+                "data": [ 
+                    {
+                        "type": "circle",
+                        "x": p.x*1000,
+                        "y": -p.y*1000,
+                        "radius": 150,
+                        "color": "#FFFFFF",
+                    } for p in self.points],
+                "is_visible": True,
+            }
+        }
+        s_draw.send_json(draw_tocorba_F)
 
         return #req_vel_x, req_vel_y, req_vel_w
+    
+
+    def tocorba_calc_cost(self, a, xI, xF, vI, vF, T):
+
+        vTx, xTx = self.get_tocorba_vel_pos(vI.x, xI.x, a, T, a[0], a[2])
+        vTy, xTy = self.get_tocorba_vel_pos(vI.y, xI.y, a, T, a[1], a[3])
+
+        vT = np.array([vTx, vTy])
+        xT = np.array([xTx, xTy])
+
+        return linalg.norm(xF - xT)**2 + linalg.norm(vF - vT)**2
+
+
+    def calc_1DOF_optimal_times(self, xI, xF, vI, vF, Umax):
+        type = 1
+        tt = -(2*vI - math.sqrt(2)*math.sqrt(vF**2 + vI**2 + 2*Umax*xF - 2*Umax*xI))/(2*Umax)
+        T = (vI - vF + 2*Umax*tt)/Umax
+
+        if tt > T or not np.isreal(tt):
+            type = 2
+            tt = (2*vI + math.sqrt(2)*math.sqrt(vF**2 + vI**2 - 2*Umax*xF + 2*Umax*xI))/(2*Umax)
+            T = (vF - vI + 2*Umax*tt)/Umax
+        
+        return T, tt
+
+
+    def get_tocorba_vel_pos(self, vI, xI, a, t, aa1, aa3):
+        a1 = a[0]
+        a2 = a[1]
+        a3 = a[2]
+        a4 = a[3]
+
+        p = np.array([aa3, a4])
+        q = np.array([aa1, a2])
+        psi3 = a1*t + a3
+        psi4 = a2*t + a4
+        h1 = math.sqrt(psi3**2 + psi4**2)
+        h2 = h1*linalg.norm(q) + linalg.norm(q)*t**2 + np.dot(p, q)
+        h3 = linalg.norm(p)*linalg.norm(q) + np.dot(p, q)
+        gamma = h2/h3
+
+        print(a)
+        print(aa1)
+        print(aa3)
+
+        v = vI \
+            + aa1*(h1 - linalg.norm(p))/(linalg.norm(q)**2) \
+            + a2*linalg.det([p, q])/(linalg.norm(q)**3)*math.log(gamma)
+        
+        x = xI \
+            + vI*t \
+            + aa1/(2*linalg.norm(q)**5) * (h1*(linalg.norm(q)*np.dot(p, q) + t*linalg.norm(q)**3) \
+            + linalg.norm(np.cross(p, q))**2*math.log(gamma) \
+            - linalg.norm(p) * (linalg.norm(q)*np.dot(p, q) + 2*t*linalg.norm(q)**3)) \
+            + a2*linalg.det([p, q])/linalg.norm(q)**3 * (math.log(gamma) * (t + np.dot(p, q)/linalg.norm(q)**2) - (h1 - linalg.norm(p))/linalg.norm(q))
+
+        return v, x
+
 
 
 robot = Robot(points = [Point(-1.5, -0.12), Point(-1, 0.12), Point(-0.5, -0.12), Point(0, 0.12), Point(1, 0), Point(0, 1), Point(-3, 2)],
