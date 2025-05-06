@@ -12,7 +12,7 @@ from numpy import linalg
 
 from aux import Point
 
-#import time
+import time as time
 
 context = zmq.Context()
 s_tracker = context.socket(zmq.SUB)
@@ -25,11 +25,18 @@ s_control.connect("ipc:///tmp/ether.signals.xsub")
 s_draw = context.socket(zmq.PUB)
 s_draw.connect("ipc:///tmp/ether.draw.xsub")
 
+s_telemetry = context.socket(zmq.PUB)
+s_telemetry.connect("ipc:///tmp/ether.telemetry.xsub")
+
 print("Control decoder example")
 
 last_frame_number = 0
 
-time = 0
+timer1 = time.time()
+timer2 = time.time()
+
+elapsed1 = []
+elapsed2 = []
 
 @define
 class Robot:
@@ -46,15 +53,18 @@ class Robot:
     trajectory_max_len = 100
     trajectory_update_int = 15
     update_counter: int = 0
-    MAX_SPEED = 2
-    MAX_ACC = 0.2
+    MAX_SPEED = 10
+    MAX_ACC = 1
+
+    tsocs_a: list = [1, 1, 1, 1]
+    tsocs_T: float = 1
 
     def update(self, x, y, angle, vel_x, vel_y, vel_angular):
         pos = Point(x, y)
         vel = Point(vel_x, vel_y)
 
         err = self.alpha*(pos - self.points[self.current_goal]).mag() + (1 - self.alpha)*(vel - self.velocities[self.current_goal]).mag() 
-        print(err)
+        # print(err)
         if err < self.EPS:
             self.current_start = self.current_goal
             self.current_goal = (self.current_goal + 1)%len(self.points)
@@ -112,38 +122,61 @@ class Robot:
             }
         s_draw.send_json(draw_trajectory_data)
 
-        self.tocorba(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
-        return self.bangbang(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
+        time0 = time.time()
+        result_tsocs = self.tsocs(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
+        time1 = time.time()
+        
+        print("TSOCS time = " + str((time1-time0)*1000))
+        elapsed1.append((time1-time0)*1000)
+        if len(elapsed1) > 1000: 
+            elapsed1.pop(0)
+
+        time0 = time.time()
+        result_bangbang = self.bangbang(pos, self.points[self.current_goal], vel, self.velocities[self.current_goal], angle)
+        time1 = time.time()
+        print("bangbang time = " + str((time1-time0)*1000))
+        elapsed2.append((time1-time0)*1000)
+        if len(elapsed2) > 1000: 
+            elapsed2.pop(0)
+
+        data = {"test_telemetry": 
+                " TSOCS avg time:     {0:.3f}ms (max: {1:.3f}ms)\n".format(np.average(elapsed1), max(elapsed1)) +
+                " Bang-bang avg time: {0:.3f}ms (max: {1:.3f}ms)\n".format(np.average(elapsed2), max(elapsed2))
+                }
+        s_telemetry.send_json(data)
+
+        return result_tsocs
         
 
 
     def bangbang(self, pos, goal, vel, vel_goal, angle):
         v_max = self.max_vel_bang_bang(pos, goal, vel, vel_goal)
         T = self.get_bang_bang_time(pos, goal, v_max, vel, vel_goal)
-        print(T)
         
-        plan = []
-        for t in range(0, 21, 1):
-            values = self.get_bang_bang_values(pos, goal, v_max, T/20*t, vel, vel_goal)
-            plan.append(values[2])
+        # plan = []
+        # for t in range(0, 21, 1):
+        #     values = self.get_bang_bang_values(pos, goal, v_max, T/20*t, vel, vel_goal)
+        #     plan.append(values[2])
 
-        draw_planned_data = {
-                "plan": {
-                    "data": [
-                        {
-                            "type": "line",
-                            "x_list": [p.x*1000 for p in plan],
-                            "y_list": [-p.y*1000 for p in plan],
-                            "color": "#FF00FF",
-                            "width": 10,
-                        },
-                    ],
-                    "is_visible": True,
-                }
-            }
-        s_draw.send_json(draw_planned_data)
+        # draw_planned_data = {
+        #         "plan": {
+        #             "data": [
+        #                 {
+        #                     "type": "line",
+        #                     "x_list": [p.x*1000 for p in plan],
+        #                     "y_list": [-p.y*1000 for p in plan],
+        #                     "color": "#FF00FF",
+        #                     "width": 10,
+        #                 },
+        #             ],
+        #             "is_visible": True,
+        #         }
+        #     }
+        # s_draw.send_json(draw_planned_data)
 
-        values = self.get_bang_bang_values(pos, goal, v_max, 0.07, vel, vel_goal)
+        global timer1
+        timer1 = time.time()
+        values = self.get_bang_bang_values(pos, goal, v_max, max(timer1-time.time(), 0.1), vel, vel_goal)
         return values[1].y, values[1].x, -angle*2
     
     def short_dist(self, v_max: np.ndarray, args: list) -> np.ndarray:
@@ -270,51 +303,48 @@ class Robot:
         return values
 
 
-    def tocorba(self, pI, pF, vI, vF, angle):
-        dP = pF - pI
-        # dP_np = np.array([dP.x, dP.y])
+    def tsocs(self, pI, pF, vI, vF, angle):
         pI_np = np.array([pI.x, pI.y])
         pF_np = np.array([pF.x, pF.y])
         vI_np = np.array([vI.x, vI.y])
         vF_np = np.array([vF.x, vF.y])
-
-        # vI_proj = np.dot(vI_np, dP_np) / np.dot(dP_np, dP_np)
-        # vF_proj = np.dot(vF_np, dP_np) / np.dot(dP_np, dP_np)
-
-        theta = math.atan2(dP.y, dP.x)
-
         Umax = self.MAX_ACC
 
-        # T, tt = self.calc_1DOF_optimal_times(0, linalg.norm(dP_np), vI_proj, vF_proj, Umax)
+        global timer2
+        dT = timer2 - time.time()
+        timer2 = time.time()
 
-        a_init = [1, -2, 3, -4]
-        # a_init.append(1 / (math.cos(theta)*(Umax*(T - tt) + vF_proj)))
-        # a_init.append(-a_init[0]*tt)
-        # a_init.append(1 / (math.sin(theta)*(Umax*(T - tt) + vF_proj)))
-        # a_init.append(-a_init[2]*tt)
+        self.tsocs_a[2] += self.tsocs_a[0]*dT
+        self.tsocs_a[3] += self.tsocs_a[1]*dT
+        self.tsocs_T -= dT
 
-        T, ttX, signX = self.calc_1DOF_optimal_times_2(pI.x, pF.x, vI.x, vF.x, Umax)
-        T, ttY, signY = self.calc_1DOF_optimal_times_2(pI.y, pF.y, vI.y, vF.y, Umax)
-        a_init[2] = signX*math.cos(theta)
-        a_init[3] = signY*math.sin(theta)
-        a_init[0] = -a_init[2]/ttX
-        a_init[1] = -a_init[3]/ttY
 
-        Tmax = (vI + vF).mag()/Umax \
-        + 2*math.sqrt((pF - pI).mag()/Umax - (vI**2 + vF**2).mag()/(2*Umax**2))
-
-        # plan_0 = []
-        # for t in range(0, 41, 1):
-        #     values = self.get_tocorba_vel_pos(pI_np, vI_np, a_init, Umax, Tmax/40*t)
-        #     plan_0.append(values[1])
-        # draw_tocorba_plan = {
-        #     "tocorba plan 0": {
+        # plan_1 = []
+        # for t in range(0, 21, 1):
+        #     values = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, self.tsocs_T/20*t)
+        #     plan_1.append(values)
+        # draw_tocorba_speeds = {
+        #     "tocorba plan 1 speeds": {
         #         "data": [
         #             {
         #                 "type": "line",
-        #                 "x_list": [p[0]*1000 for p in plan_0],
-        #                 "y_list": [-p[1]*1000 for p in plan_0],
-        #                 "color": "#FFFF00",
+        #                 "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
+        #                 "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
+        #                 "color": "#00FFFF",
+        #                 "width": 5,
+        #             } for p in plan_1],
+        #         "is_visible": True,
+        #     }
+        # }
+        # s_draw.send_json(draw_tocorba_speeds)
+        # draw_tocorba_plan = {
+        #     "tocorba plan 1": {
+        #         "data": [
+        #             {
+        #                 "type": "line",
+        #                 "x_list": [p[1][0]*1000 for p in plan_1],
+        #                 "y_list": [-p[1][1]*1000 for p in plan_1],
+        #                 "color": "#0000FF",
         #                 "width": 10,
         #             },
         #         ],
@@ -323,102 +353,131 @@ class Robot:
         # }
         # s_draw.send_json(draw_tocorba_plan)
 
-        print(pI)
-        print(pF)
-        print(vI)
-        print(vF)
-        # print(Tmax)
-        # print(a_init)
 
-        args_1 = [pI_np, pF_np, vI_np, vF_np, Umax, Tmax]
-        solution = least_squares(self.tocorba_calc_cost_1, a_init, method="trf", max_nfev=50, args=args_1)
+        success_2, a_2, T = self.tsocs_stage_2(self.tsocs_a, pI_np, pF_np, vI_np, vF_np, Umax, self.tsocs_T)
+        if success_2:
+            self.tsocs_a = a_2
+            self.tsocs_T = T
+        else:
+            success_1, a_0, a_1, Tmax = self.tsocs_stage_1(pI_np, pF_np, vI_np, vF_np, Umax)
+            success_2, a_2, T = self.tsocs_stage_2(a_1, pI_np, pF_np, vI_np, vF_np, Umax, Tmax)
 
-        # print(solution)
-        a_1 = solution.x
-        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, a_1, Umax, Tmax)
-        print(xT, vT, Tmax)
+            # plan_0 = []
+            # for t in range(0, 21, 1):
+            #     values = self.get_tocorba_vel_pos(pI_np, vI_np, a_0, Umax, Tmax/20*t)
+            #     plan_0.append(values[1])
+            # draw_tocorba_plan = {
+            #     "tocorba plan 0": {
+            #         "data": [
+            #             {
+            #                 "type": "line",
+            #                 "x_list": [p[0]*1000 for p in plan_0],
+            #                 "y_list": [-p[1]*1000 for p in plan_0],
+            #                 "color": "#FFFFFF",
+            #                 "width": 10,
+            #             },
+            #         ],
+            #         "is_visible": True,
+            #     }
+            # }
+            # s_draw.send_json(draw_tocorba_plan)
 
-        plan_1 = []
-        for t in range(0, 41, 1):
-            values = self.get_tocorba_vel_pos(pI_np, vI_np, a_1, Umax, Tmax/40*t)
-            plan_1.append(values)
-            # print(values[1], values[0], Tmax/40*t)
-        draw_tocorba_speeds = {
-            "tocorba plan 1 speeds": {
-                "data": [
-                    {
-                        "type": "line",
-                        "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
-                        "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
-                        "color": "#00FFFF",
-                        "width": 5,
-                    } for p in plan_1],
-                "is_visible": True,
-            }
-        }
-        s_draw.send_json(draw_tocorba_speeds)
-        draw_tocorba_plan = {
-            "tocorba plan 1": {
-                "data": [
-                    {
-                        "type": "line",
-                        "x_list": [p[1][0]*1000 for p in plan_1],
-                        "y_list": [-p[1][1]*1000 for p in plan_1],
-                        "color": "#0000FF",
-                        "width": 10,
-                    },
-                ],
-                "is_visible": True,
-            }
-        }
-        s_draw.send_json(draw_tocorba_plan)
+            if success_2:
+                self.tsocs_a = a_2
+                self.tsocs_T = T
 
-        a_init_2 = [a_1[0], a_1[1], a_1[2], a_1[3], Tmax]
-        args_2 = [pI_np, pF_np, vI_np, vF_np, Umax]
-        solution = least_squares(self.tocorba_calc_cost_2, a_init_2, method="trf", args=args_2, bounds=([-np.inf, -np.inf, -np.inf, -np.inf, 0], [np.inf, np.inf, np.inf, np.inf, Tmax]))
 
-        # print(solution)
-        a = solution.x
-        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, a, Umax, a[4])
-        print(xT, vT, a[4])
+        # plan_2 = []
+        # for t in range(0, 21, 1):
+        #     values = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, self.tsocs_T/20*t)
+        #     plan_2.append(values)
+        # draw_tocorba_speeds = {
+        #     "tocorba plan 2 speeds": {
+        #         "data": [
+        #             {
+        #                 "type": "line",
+        #                 "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
+        #                 "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
+        #                 "color": "#FFFF00",
+        #                 "width": 5,
+        #             } for p in plan_2],
+        #         "is_visible": True,
+        #     }
+        # }
+        # s_draw.send_json(draw_tocorba_speeds)
+        # draw_tocorba_plan = {
+        #     "tocorba plan 2": {
+        #         "data": [
+        #             {
+        #                 "type": "line",
+        #                 "x_list": [p[1][0]*1000 for p in plan_2],
+        #                 "y_list": [-p[1][1]*1000 for p in plan_2],
+        #                 "color": "#FFAA00",
+        #                 "width": 10,
+        #             },
+        #         ],
+        #         "is_visible": True,
+        #     }
+        # }
+        # s_draw.send_json(draw_tocorba_plan)
 
-        plan_2 = []
-        for t in range(0, 41, 1):
-            values = self.get_tocorba_vel_pos(pI_np, vI_np, a, Umax, a[4]/40*t)
-            plan_2.append(values)
-            # print(values[1])
-        draw_tocorba_speeds = {
-            "tocorba plan 2 speeds": {
-                "data": [
-                    {
-                        "type": "line",
-                        "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
-                        "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
-                        "color": "#FFFF00",
-                        "width": 5,
-                    } for p in plan_2],
-                "is_visible": True,
-            }
-        }
-        s_draw.send_json(draw_tocorba_speeds)
-        draw_tocorba_plan = {
-            "tocorba plan 2": {
-                "data": [
-                    {
-                        "type": "line",
-                        "x_list": [p[1][0]*1000 for p in plan_2],
-                        "y_list": [-p[1][1]*1000 for p in plan_2],
-                        "color": "#FFAA00",
-                        "width": 10,
-                    },
-                ],
-                "is_visible": True,
-            }
-        }
-        s_draw.send_json(draw_tocorba_plan)
+        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, max(dT, 0.1))
+        return vT[1], vT[0], -angle*2
 
-        return #req_vel_x, req_vel_y, req_vel_w
+    def tsocs_stage_1(self, pI, pF, vI, vF, Umax):
+        theta = math.atan2(pF[1] - pI[1], pF[0] - pI[0])
+        T, ttX, signX = self.calc_1DOF_optimal_times_2(pI[0], pF[0], vI[0], vF[0], Umax)
+        T, ttY, signY = self.calc_1DOF_optimal_times_2(pI[1], pF[1], vI[1], vF[1], Umax)
+        a_0 = [1, -2, 3, -4]
+        a_0[2] = 1*math.cos(theta)
+        a_0[3] = 1*math.sin(theta)
+        a_0[0] = -a_0[2]/ttX
+        a_0[1] = -a_0[3]/ttY
+        s1 = linalg.norm(pF - pI)/Umax - linalg.norm(vI**2 + vF**2)/(2*Umax**2)
+        if s1 <= 0:
+            s2 = 0
+        else:
+            s2 = 2*math.sqrt(s1)
+        Tmax = (linalg.norm(vI + vF))/Umax + s2
+
+        args = [pI, pF, vI, vF, Umax, Tmax]
+        solution = least_squares(
+            self.tocorba_calc_cost_1, 
+            a_0, 
+            method="trf", 
+            max_nfev=50, 
+            ftol=1e-2, 
+            xtol=1e-2, 
+            gtol=1e-2, 
+            args=args,
+            )
+        return solution.success, a_0, solution.x, Tmax
     
+    def tsocs_stage_2(self, a_1, pI, pF, vI, vF, Umax, Tmax):
+        a_init = [a_1[0], a_1[1], a_1[2], a_1[3], Tmax]
+        args = [pI, pF, vI, vF, Umax]
+        solution = least_squares(
+            self.tocorba_calc_cost_2, 
+            a_init, 
+            method="trf", 
+            max_nfev=15, 
+            ftol=1e-5, 
+            xtol=1e-5, 
+            gtol=1e-5, 
+            args=args, 
+            # bounds=(
+            #     [-np.inf, -np.inf, -np.inf, -np.inf, 0], 
+            #     [np.inf, np.inf, np.inf, np.inf, Tmax]
+            #     ),
+            )
+        a_2 = [
+            solution.x[0], 
+            solution.x[1], 
+            solution.x[2], 
+            solution.x[3], 
+        ]
+        T = solution.x[4]
+        return solution.success, a_2, T
 
     def tocorba_calc_cost_2(self, a, xI, xF, vI, vF, Umax):
         # print("CALC COST_2")
@@ -482,7 +541,11 @@ class Robot:
         s25 = math.sqrt(s1)
         s26 = math.sqrt(s13)
         kEpsilonSq = 1e-18
-        s24 = math.log((s25*s7 + t*s1 + s10 + kEpsilonSq) / (s25*s26 + s10 + kEpsilonSq))
+        s30 = (s25*s7 + t*s1 + s10 + kEpsilonSq) / (s25*s26 + s10 + kEpsilonSq)
+        if s30 <= 0:
+            s24 = -1e20
+        else:
+            s24 = math.log(s30)
         s27 = s25*s10
         s28 = s25*s25*s25
         s29 = s28*s25*s25
@@ -514,9 +577,14 @@ robot = Robot(points = [Point(-1.5, -0.12), Point(-1, 0.12), Point(-0.5, -0.12),
 while True:
     print(".")
     tracker_data = structure(s_tracker.recv_json(), tm.TrackerWrapperPacket)
-    time = tracker_data.tracked_frame.timestamp
+    while True:
+        try:
+            new_tracker_data = structure(s_tracker.recv_json(flags=zmq.NOBLOCK), tm.TrackerWrapperPacket)
+            tracker_data = new_tracker_data
+        except:
+            break
     # print(tracker_data.tracked_frame.timestamp)
-    print(tracker_data.tracked_frame.frame_number)
+    # print(tracker_data.tracked_frame.frame_number)
     # print(tracker_data.tracked_frame.frame_number - last_frame_number)
     # if len(tracker_data.tracked_frame.robots) > 0: print(tracker_data.tracked_frame.robots[0])
 
