@@ -54,7 +54,7 @@ init_py:
 	. venv/bin/activate; pip install -r requirements.txt
 
 up-py: up-message
-	python3 control_decoder_example.py
+	python3 control_decoder.py
 
 up-message:
 	@echo "${PURPLE}============="
