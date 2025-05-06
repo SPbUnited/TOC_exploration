@@ -1,20 +1,7 @@
-# Control-decoder-example
-
-Example code for control decoder for PAcmaCS
+# Exploration of Time-optimal control
 
 ## Python
-
-```bash
-cd python
-make init
-source venv/bin/activate
-make up-py # or: python control_decoder_example.py
-```
+Contains working bang-bang and TSOCS algorithms
 
 ## C++
-
-```bash
-cd cpp
-make init
-make up-cpp # or: make all && ./main.out
-```
+Contains control-decoder-example for c++
