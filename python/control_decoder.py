@@ -54,7 +54,7 @@ class Robot:
     trajectory_update_int = 15
     update_counter: int = 0
     MAX_SPEED = 2
-    MAX_ACC = 2
+    MAX_ACC = 1.5
 
     tsocs_a: list = [1, 1, 1, 1]
     tsocs_T: float = 1
@@ -147,7 +147,7 @@ class Robot:
                 }
         s_telemetry.send_json(data)
 
-        return result_bangbang
+        return result_tsocs
         
 
 
@@ -177,8 +177,8 @@ class Robot:
         s_draw.send_json(draw_planned_data)
 
         global timer1
+        values = self.get_bang_bang_values(pos, goal, v_max, max(time.time() - timer1, 0.1), vel, vel_goal)
         timer1 = time.time()
-        values = self.get_bang_bang_values(pos, goal, v_max, max(timer1-time.time(), 0.1), vel, vel_goal)
         return values[1].y, values[1].x, -angle*2
     
     def short_dist(self, v_max: np.ndarray, args: list) -> np.ndarray:
@@ -313,7 +313,7 @@ class Robot:
         Umax = self.MAX_ACC
 
         global timer2
-        dT = timer2 - time.time()
+        dT = time.time() - timer2
         timer2 = time.time()
 
         self.tsocs_a[2] += self.tsocs_a[0]*dT
@@ -428,6 +428,7 @@ class Robot:
         }
         s_draw.send_json(draw_tocorba_plan)
 
+        print(dT)
         vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, max(dT, 0.1))
         return vT[1], vT[0], -angle*2
 
