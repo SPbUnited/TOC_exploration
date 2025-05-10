@@ -45,16 +45,21 @@ class Robot:
     velocities: list[Point]
     current_start: int
     current_goal: int
-    EPS = 0.1
+    EPS = 0.05
     alpha = 0.7
-    COORD_EPS = 0.1
+    COORD_EPS = 0.05
     SPEED_EPS = 0.5
     trajectory: list[Point] = []
-    trajectory_max_len = 100
-    trajectory_update_int = 15
+    trajectory_max_len = 50
+    trajectory_update_int = 1
     update_counter: int = 0
-    MAX_SPEED = 2
-    MAX_ACC = 1.5
+    MAX_SPEED = 10
+    MAX_ACC = 2
+    TIME_K = 6
+    B_MIN = 0.1
+    K1 = 20
+    K2 = 0.1
+    T_K_REG = 1.4
 
     tsocs_a: list = [1, 1, 1, 1]
     tsocs_T: float = 1
@@ -147,7 +152,7 @@ class Robot:
                 }
         s_telemetry.send_json(data)
 
-        return result_tsocs
+        return result_bangbang
         
 
 
@@ -177,7 +182,7 @@ class Robot:
         s_draw.send_json(draw_planned_data)
 
         global timer1
-        values = self.get_bang_bang_values(pos, goal, v_max, max(time.time() - timer1, 0.1), vel, vel_goal)
+        values = self.get_bang_bang_values(pos, goal, v_max, (time.time() - timer1)*self.TIME_K, vel, vel_goal)
         timer1 = time.time()
         return values[1].y, values[1].x, -angle*2
     
@@ -357,10 +362,8 @@ class Robot:
 
 
         success_2, a_2, T = self.tsocs_stage_2(self.tsocs_a, pI_np, pF_np, vI_np, vF_np, Umax, self.tsocs_T)
-        if success_2:
-            self.tsocs_a = a_2
-            self.tsocs_T = T
-        else:
+        v, x = self.get_tocorba_vel_pos(pI_np, vI_np, a_2, Umax, dT)
+        if not success_2 or linalg.norm(v - vI_np)/dT > Umax:
             success_1, a_0, a_1, Tmax = self.tsocs_stage_1(pI_np, pF_np, vI_np, vF_np, Umax)
             success_2, a_2, T = self.tsocs_stage_2(a_1, pI_np, pF_np, vI_np, vF_np, Umax, Tmax)
 
@@ -388,6 +391,9 @@ class Robot:
             if success_2:
                 self.tsocs_a = a_2
                 self.tsocs_T = T
+        else:
+            self.tsocs_a = a_2
+            self.tsocs_T = T
         
 
         max_speed = 0
@@ -429,7 +435,7 @@ class Robot:
         s_draw.send_json(draw_tocorba_plan)
 
         print(dT)
-        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, max(dT, 0.1))
+        vT, xT = self.get_tocorba_vel_pos(pI_np, vI_np, self.tsocs_a, Umax, dT*self.TIME_K)
         return vT[1], vT[0], -angle*2
 
     def tsocs_stage_1(self, pI, pF, vI, vF, Umax):
@@ -452,26 +458,26 @@ class Robot:
         solution = least_squares(
             self.tocorba_calc_cost_1, 
             a_0, 
-            method="trf", 
+            method="lm", 
             max_nfev=50, 
-            ftol=1e-2, 
-            xtol=1e-2, 
-            gtol=1e-2, 
+            ftol=1e-6, 
+            xtol=1e-6, 
+            gtol=1e-6, 
             args=args,
             )
         return solution.success, a_0, solution.x, Tmax
     
     def tsocs_stage_2(self, a_1, pI, pF, vI, vF, Umax, Tmax):
         a_init = [a_1[0], a_1[1], a_1[2], a_1[3], Tmax]
-        args = [pI, pF, vI, vF, Umax]
+        args = [pI, pF, vI, vF, Umax, Tmax]
         solution = least_squares(
             self.tocorba_calc_cost_2, 
             a_init, 
-            method="trf", 
-            max_nfev=15, 
-            ftol=1e-5, 
-            xtol=1e-5, 
-            gtol=1e-5, 
+            method="lm", 
+            max_nfev=70, 
+            ftol=1e-8, 
+            xtol=1e-8, 
+            gtol=1e-8, 
             args=args, 
             # bounds=(
             #     [-np.inf, -np.inf, -np.inf, -np.inf, 0], 
@@ -487,20 +493,29 @@ class Robot:
         T = solution.x[4]
         return solution.success, a_2, T
 
-    def tocorba_calc_cost_2(self, a, xI, xF, vI, vF, Umax):
+    def tocorba_calc_cost_2(self, a, xI, xF, vI, vF, Umax, T_e):
         # print("CALC COST_2")
         cost = self.tocorba_calc_cost_1(a, xI, xF, vI, vF, Umax, a[4])
-        return [cost[0], cost[1], cost[2], cost[3], 0]
+
+        B = max(1 - linalg.norm(vF - vI)/(Umax*T_e), self.B_MIN)
+
+        reg = self.K1 * math.exp(self.K2*(a[4]/(T_e + 1e20) - self.T_K_REG))
+
+        return [cost[0], cost[1], B*cost[2], B*cost[3], reg]
 
 
     def tocorba_calc_cost_1(self, a, xI, xF, vI, vF, Umax, T):
         # print("CALC COST_1")
         vT, xT = self.get_tocorba_vel_pos(xI, vI, a, Umax, T)
         return [
-            math.pow(xF[0] - xT[0], 2),
-            math.pow(xF[1] - xT[1], 2),
-            math.pow(vF[0] - vT[0], 2),
-            math.pow(vF[1] - vT[1], 2),
+            # math.pow(xF[0] - xT[0], 2),
+            # math.pow(xF[1] - xT[1], 2),
+            # math.pow(vF[0] - vT[0], 2),
+            # math.pow(vF[1] - vT[1], 2),
+            xF[0] - xT[0],
+            xF[1] - xT[1],
+            vF[0] - vT[0],
+            vF[1] - vT[1],
             ]
       
 
