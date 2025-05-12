@@ -10,6 +10,8 @@ from scipy.optimize import root, least_squares
 import numpy as np
 from numpy import linalg
 
+import socket
+
 from aux import Point
 
 import time as time
@@ -27,6 +29,43 @@ s_draw.connect("ipc:///tmp/ether.draw.xsub")
 
 s_telemetry = context.socket(zmq.PUB)
 s_telemetry.connect("ipc:///tmp/ether.telemetry.xsub")
+
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+UDP_IP = "10.0.120.211"
+UDP_PORT = 10000
+
+BOT_NUMBER = 5
+
+def create_packet(
+    bot_number: int,  # unsigned byte (0-255)
+    coord_x: int,  # signed byte (-128 to 127)
+    coord_y: int,  # signed byte
+    angle: int,  # хз
+    beep: int,  # signed byte
+) -> bytes:
+    # Convert all values to bytes and pack into a
+    coord_x_abs = abs(coord_x)
+    coord_y_abs = abs(coord_y)
+    bytes_list = [
+        0x01,  # Header
+        bot_number,
+        coord_x_abs.to_bytes(1, "big")[0], #speed x
+        coord_y_abs.to_bytes(1, "big")[0], #speed y
+        angle.to_bytes(1, "big", signed=True)[0], #speed r
+        0, # dribbler speed
+        0, #kicker voltage
+        0, # kick up
+        0,  #kick down
+        beep, # beep
+        int(coord_x < 0), # drib enable
+        int(coord_y < 0), # kick enable
+        0, # autokick
+    ]
+
+    return bytes(bytes_list)
+
 
 print("Control decoder example")
 
@@ -53,8 +92,8 @@ class Robot:
     trajectory_max_len = 50
     trajectory_update_int = 1
     update_counter: int = 0
-    MAX_SPEED = 10
-    MAX_ACC = 2
+    MAX_SPEED = 1
+    MAX_ACC = 0.5
     TIME_K = 6
     B_MIN = 0.1
     K1 = 20
@@ -595,6 +634,7 @@ while True:
         try:
             new_tracker_data = structure(s_tracker.recv_json(flags=zmq.NOBLOCK), tm.TrackerWrapperPacket)
             tracker_data = new_tracker_data
+            print("sf")
         except:
             break
     # print(tracker_data.tracked_frame.timestamp)
@@ -607,7 +647,8 @@ while True:
     tracked_robot = None
 
     for r in tracker_data.tracked_frame.robots:
-        if r.robot_id.team == tm.Team.YELLOW and r.robot_id.id == 0:
+        print(r)
+        if r.robot_id.team == tm.Team.YELLOW and r.robot_id.id == BOT_NUMBER:
             tracked_robot = r
 
     if tracked_robot is None:
@@ -621,6 +662,7 @@ while True:
         tracked_robot.vel.y,
         tracked_robot.vel_angular,
     )
+
 
     control_data = rcm.RobotControlExt(
         isteamyellow=True,
@@ -654,3 +696,18 @@ while True:
     s_control.send_json(
         {"transnet": "actuate_robot", "data": unstructure(control_data)}
     )
+
+
+    if abs(tracked_robot.pos.x) > 2500 or abs(tracked_robot.pos.y) > 4000:
+        print("Плохие корды, ниче не отправляю")
+        continue
+
+    packet = create_packet(
+        BOT_NUMBER,
+        req_vel_x/100, # int от 0 до 255
+        req_vel_y/100, # int от 0 до 255
+        0, # int от -127 до 127
+        0,
+    )
+    print("отправил", packet)
+    sock.sendto(packet, (UDP_IP, UDP_PORT))
