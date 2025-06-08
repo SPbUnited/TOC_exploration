@@ -3,3 +3,4 @@ attrs
 cattrs
 numpy
 scipy
+matplotlib
