@@ -5,6 +5,7 @@ from cattrs import structure, unstructure
 import robot_command_model as rcm
 import tracker_model as tm
 
+import math
 import numpy as np
 
 import socket
@@ -14,6 +15,7 @@ import time
 import csv
 
 import threading
+import sys
 
 import tsocs
 import bangbang
@@ -28,6 +30,7 @@ s_control.connect("ipc:///tmp/ether.signals.xsub")
 
 s_draw = context.socket(zmq.PUB)
 s_draw.connect("ipc:///tmp/ether.draw.xsub")
+tsocs.s_draw = s_draw
 
 s_telemetry = context.socket(zmq.PUB)
 s_telemetry.connect("ipc:///tmp/ether.telemetry.xsub")
@@ -68,10 +71,12 @@ def create_packet(
 elapsed1 = []
 elapsed2 = []
 
-points = [np.array([-1.5, -0.12]), np.array([-1, 0.12]), np.array([-0.5, -0.12]), np.array([0, 0.12]), np.array([1, 0]), np.array([0, 1]), np.array([-3, 2])]
-velocities = [np.array([0, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.3, 0.4]), np.array([0.3, 0.4]), np.array([-0.5, -0.2])]
-# points = [np.array([1.5, 1]), np.array([1.5, 2])]
-# velocities = [np.array([0.0, 0]), np.array([0.5, 0])]
+# points = [np.array([-1.5, -0.12]), np.array([-1, 0.12]), np.array([-0.5, -0.12]), np.array([0, 0.12]), np.array([1, 0]), np.array([0, 1]), np.array([-3, 2])]
+# velocities = [np.array([0, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.3, 0.4]), np.array([0.3, 0.4]), np.array([-0.5, -0.2])]
+start_vel_x = 0.25
+start_vel_y = 1
+points = [np.array([0, 0]), np.array([0.5, 0.5]), np.array([0.5, -0.5])]
+velocities = [np.array([0.0, 0]), np.array([0.5, 0]), np.array([-0.5, 0])]
 current_start = 0
 current_goal = 1
 
@@ -95,21 +100,22 @@ tsocs.tsocs_params = {"B_MIN": 0.1,
 
 BOT_NUMBER = 0
 
-PLANER_FREQ     = 10
+PLANER_FREQ     = 1
 CONTROLLER_FREQ = 100
 
 BANGBANG_PLANNER    = 0
 TSOCS_PLANNER       = 1
 planner_type = BANGBANG_PLANNER
 
+preTrjUpdateTimer = time.time()
 trjUpdateTimer = time.time()
 
-FF_Kp = 5
+FF_Kp = 1
 
-TIME_K = 1.16
+TIME_K = 150/500
 
-dT = 0/CONTROLLER_FREQ
-dT_K = 1
+dT = 1/CONTROLLER_FREQ
+dT_K = 7
 
 x = 0
 y = 0
@@ -117,17 +123,24 @@ vel_x = 0
 vel_y = 0
 
 def update_trajectory():
+    print("start")
+    plannerTime = time.time()
+
     global trjUpdateTimer
-    trjUpdateTimer = time.time()
+    trjUpdateTimer = preTrjUpdateTimer
 
     pos = np.array([x, y])
     vel = np.array([vel_x, vel_y])
+
+    if current_goal == current_start:
+        pos = points[0]
+        vel = np.array([start_vel_x, start_vel_y])
 
     time0 = time.time()
     tsocs.update(pos, points[current_goal], vel, velocities[current_goal], MAX_ACC)
     time1 = time.time()
     
-    print("TSOCS time = " + str((time1-time0)*1000))
+    print("TSOCS " + str((time1-time0)*1000))
     elapsed1.append((time1-time0)*1000)
     if len(elapsed1) > 1000: 
         elapsed1.pop(0)
@@ -135,26 +148,29 @@ def update_trajectory():
 
     # max_speed = 0
     plan_2 = []
-    for t in range(0, 21, 1):
-        values = tsocs.get_vel_pos_t(tsocs.tsocs_T/20*t)
-        plan_2.append(values)
+    with open('tsocs.csv', 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile, delimiter=' ', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        for t in range(0, 101, 1):
+            values = tsocs.get_vel_pos_t(tsocs.tsocs_T/100*t)
+            plan_2.append(values)
+            csvwriter.writerow([values[1][0], values[1][1]])
     #     if linalg.norm(values[0]) > max_speed:
     #         max_speed = linalg.norm(values[0])
 
-    draw_tocorba_speeds = {
-        "tocorba plan 2 speeds": {
-            "data": [
-                {
-                    "type": "line",
-                    "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
-                    "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
-                    "color": "#FFFF00",
-                    "width": 5,
-                } for p in plan_2],
-            "is_visible": True,
-        }
-    }
-    s_draw.send_json(draw_tocorba_speeds)
+    # draw_tocorba_speeds = {
+    #     "tocorba plan 2 speeds": {
+    #         "data": [
+    #             {
+    #                 "type": "line",
+    #                 "x_list": [p[1][0]*1000, (p[1][0]+p[0][0])*1000],
+    #                 "y_list": [-p[1][1]*1000, -(p[1][1]+p[0][1])*1000],
+    #                 "color": "#FFFF00",
+    #                 "width": 5,
+    #             } for p in plan_2],
+    #         "is_visible": True,
+    #     }
+    # }
+    # s_draw.send_json(draw_tocorba_speeds)
     draw_tocorba_plan = {
         "tocorba plan 2": {
             "data": [
@@ -163,7 +179,7 @@ def update_trajectory():
                     "x_list": [p[1][0]*1000 for p in plan_2],
                     "y_list": [-p[1][1]*1000 for p in plan_2],
                     "color": "#FFAA00",
-                    "width": 10,
+                    "width": 30,
                 },
             ],
             "is_visible": True,
@@ -175,15 +191,36 @@ def update_trajectory():
     time0 = time.time()
     bangbang.update(pos, points[current_goal], vel, velocities[current_goal], MAX_ACC, MAX_VEL)
     time1 = time.time()
-    print("bangbang time = " + str((time1-time0)*1000))
+    print("bangbang " + str((time1-time0)*1000))
     elapsed2.append((time1-time0)*1000)
     if len(elapsed2) > 1000: 
         elapsed2.pop(0)
     
+    draw_speeed_data = {
+        "speeeed": {
+            "data": [
+                {
+                    "type": "arrow",
+                    "x": float(0),
+                    "y": float(0),
+                    "dx": float(vel[0]*1000),
+                    "dy": float(-vel[1]*1000),
+                    "color": "#0000FF",
+                    "width": 5,
+                },
+            ],
+            "is_visible": True,
+        }
+    }
+    s_draw.send_json(draw_speeed_data)
+
     plan = []
-    for t in range(0, 21, 1):
-        values = bangbang.get_bang_bang_values(bangbang.T/20*t)
-        plan.append(values[2])
+    with open('bang_s.csv', 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile, delimiter=' ', quotechar='|', quoting=csv.QUOTE_MINIMAL)
+        for t in range(0, 101, 1):
+            values = bangbang.get_bang_bang_values(bangbang.T/100*t)
+            plan.append(values[2])
+            csvwriter.writerow([values[2][0], values[2][1]])
     draw_planned_data = {
             "plan": {
                 "data": [
@@ -200,11 +237,17 @@ def update_trajectory():
         }
     s_draw.send_json(draw_planned_data)
 
+    plannerTime = time.time() - plannerTime
     data = {"Computation time": 
             " TSOCS avg time:     {0:.3f}ms (min: {1:.3f}ms, max: {2:.3f}ms)\n".format(np.average(elapsed1), min(elapsed1), max(elapsed1)) +
-            " Bang-bang avg time: {0:.3f}ms (min: {1:.3f}ms, max: {2:.3f}ms)\n".format(np.average(elapsed2), min(elapsed2), max(elapsed2))
+            " Bang-bang avg time: {0:.3f}ms (min: {1:.3f}ms, max: {2:.3f}ms)\n".format(np.average(elapsed2), min(elapsed2), max(elapsed2)) +
+            " Planner time: {0:.3f}ms\n".format(plannerTime*1000)
             }
     s_telemetry.send_json(data)
+    
+    print("end")
+    # while True:
+    #     print("-")
 
 
 def update_vision():
@@ -233,16 +276,45 @@ def update_vision():
     vel_y = tracked_robot.vel.y/TIME_K
     vel_angle = tracked_robot.vel_angular
 
+    draw_speeed_data = {
+        "speeeed2": {
+            "data": [
+                {
+                    "type": "arrow",
+                    "x": float(0),
+                    "y": float(0),
+                    "dx": float(vel_x*1000),
+                    "dy": float(-vel_y*1000),
+                    "color": "#FF0000",
+                    "width": 5,
+                },
+            ],
+            "is_visible": True,
+        }
+    }
+    s_draw.send_json(draw_speeed_data)
+
+    global preTrjUpdateTimer
+    preTrjUpdateTimer = time.time()
+
     pos = np.array([x, y])
     vel = np.array([vel_x, vel_y])
+    print(np.linalg.norm(vel))
 
     global current_goal, current_start, update_counter
 
     err = alpha*np.linalg.norm(pos - points[current_goal]) + (1 - alpha)*np.linalg.norm(vel - velocities[current_goal]) 
+
+    if current_goal == current_start:
+        err = alpha*np.linalg.norm(pos - points[0]) + (1 - alpha)*np.linalg.norm(vel - velocities[0]) 
     # print(err)
     if err < EPS:
-        current_start = current_goal
-        current_goal = (current_goal + 1)%len(points)
+        if current_goal == current_start:
+            current_start = 0
+            current_goal = 1
+        else:
+            current_start = current_goal
+            current_goal = (current_goal + 1)%len(points)
 
     update_counter += 1
     if update_counter > trajectory_update_int:
@@ -300,15 +372,21 @@ def update_vision():
 
 def update_control():
 
-    t = (time.time() - trjUpdateTimer)*TIME_K + dT*dT_K
+    t = (time.time() - trjUpdateTimer) + dT*dT_K
     if planner_type == BANGBANG_PLANNER:
         acc, vel, coord = bangbang.get_bang_bang_values(t)
     elif planner_type == TSOCS_PLANNER:
         vel, coord = tsocs.get_vel_pos_t(t)
 
-    req_vel_x = vel[0] + (coord[0] - x)*FF_Kp
-    req_vel_y = vel[1] + (coord[1] - y)*FF_Kp
-    req_vel_w = -angle*3
+    if current_goal == current_start:
+        req_vel_x = start_vel_x*math.cos(angle) + start_vel_y*math.sin(angle)
+        req_vel_y = -start_vel_x*math.sin(angle) + start_vel_y*math.cos(angle)
+    else:
+        req_vel_x = vel[0] + (coord[0] - x)*FF_Kp
+        req_vel_y = vel[1] + (coord[1] - y)*FF_Kp
+        req_vel_x = req_vel_x*math.cos(angle) + req_vel_y*math.sin(angle)
+        req_vel_y = -req_vel_x*math.sin(angle) + req_vel_y*math.cos(angle)
+    req_vel_w = -angle*5
 
     control_data = rcm.RobotControlExt(
         isteamyellow=True,
@@ -317,10 +395,10 @@ def update_control():
                 id=0,
                 move_command=rcm.RobotMoveCommand(
                     local_velocity=rcm.MoveLocalVelocity(
-                        forward=float(req_vel_x),
-                        left=float(req_vel_y),
-                        # forward=float(0.5),
-                        # left=float(0),
+                        # forward=float(req_vel_x/TIME_K),
+                        # left=float(req_vel_y/TIME_K),
+                        forward=float(0.5),
+                        left=float(0),
                         angular=float(req_vel_w),
                     ),
                 ),
@@ -358,7 +436,7 @@ def planner():
 
 
 def controller():
-    with open('test.csv', 'w', newline='') as csvfile:
+    with open('path.csv', 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile, delimiter=' ', quotechar='|', quoting=csv.QUOTE_MINIMAL)
         program_start_time = time.time()
 
@@ -367,12 +445,13 @@ def controller():
 
             print("controller: ")
             update_vision()
+            # update_trajectory()
             update_control()
             csvwriter.writerow([time.time() - program_start_time, x, y])
 
             time.sleep(max(0, 1/CONTROLLER_FREQ - (time.time() - controller_timer)))
 
-
+sys.setswitchinterval(0.005)
 threads = []
 threads.append(threading.Thread(target=planner))
 threads.append(threading.Thread(target=controller))

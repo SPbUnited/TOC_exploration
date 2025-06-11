@@ -19,6 +19,7 @@ def update(pos, goal, vel, vel_goal, acc, sp):
     global v_max, T
     v_max = max_vel_bang_bang(pos, goal, vel, vel_goal)
     T = get_bang_bang_time(pos, goal, v_max, vel, vel_goal)
+    print("Bang-bang time = " + str(T))
 
     global xIg, vIg, xFg, vFg, max_acc, max_vel
     xIg = pos

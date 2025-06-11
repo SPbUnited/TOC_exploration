@@ -80,20 +80,20 @@ with open('test.csv', newline='') as csvfile:
     time = []
     x_data = []
     y_data = []
-    color
+    # color
 
     for line in csvreader:
         # print(line)
         time.append(float(line[0]))
         x_data.append(float(line[1]))
         y_data.append(float(line[2]))
-        color.append()
+        # color.append()
 
-    fig1, ax1 = plt.subplots()
-    lines = colored_line(x_data, y_data, color, ax1, linewidth=10, cmap="plasma", label="Траектория")
-    fig1.colorbar(lines)  # add a color legend
+    # fig1, ax1 = plt.subplots()
+    # lines = colored_line(x_data, y_data, color, ax1, linewidth=10, cmap="plasma", label="Траектория")
+    # fig1.colorbar(lines)  # add a color legend
 
-    # plt.plot(x_data, y_data, label="Траектория")
+    plt.plot(x_data, y_data, label="Траектория")
 
     plt.grid(color=(0,0,0), alpha=0.3, linestyle='-', linewidth=1)
     plt.legend()

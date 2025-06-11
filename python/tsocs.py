@@ -3,6 +3,11 @@ from scipy.optimize import root, least_squares
 import numpy as np
 from numpy import linalg
 
+import csv
+
+import zmq
+s_draw: zmq.SyncSocket
+
 import time as time
 timer = time.time()
 
@@ -39,10 +44,10 @@ def update(pI_np, pF_np, vI_np, vF_np, acc):
     tsocs_T -= dT
 
 
-    # plan_1 = []
-    # for t in range(0, 21, 1):
-    #     values = get_vel_pos(pI_np, vI_np, tsocs_a, Umax, tsocs_T/20*t)
-    #     plan_1.append(values)
+    plan_1 = []
+    for t in range(0, 21, 1):
+        values = get_vel_pos(tsocs_T/20*t, pI_np, vI_np, tsocs_a, Umax)
+        plan_1.append(values)
     # draw_tocorba_speeds = {
     #     "tocorba plan 1 speeds": {
     #         "data": [
@@ -57,21 +62,7 @@ def update(pI_np, pF_np, vI_np, vF_np, acc):
     #     }
     # }
     # s_draw.send_json(draw_tocorba_speeds)
-    # draw_tocorba_plan = {
-    #     "tocorba plan 1": {
-    #         "data": [
-    #             {
-    #                 "type": "line",
-    #                 "x_list": [p[1][0]*1000 for p in plan_1],
-    #                 "y_list": [-p[1][1]*1000 for p in plan_1],
-    #                 "color": "#0000FF",
-    #                 "width": 10,
-    #             },
-    #         ],
-    #         "is_visible": True,
-    #     }
-    # }
-    # s_draw.send_json(draw_tocorba_plan)
+    
 
 
     success_2, a_2, T = tsocs_stage_2(tsocs_a, pI_np, pF_np, vI_np, vF_np, Umax, tsocs_T)
@@ -80,25 +71,45 @@ def update(pI_np, pF_np, vI_np, vF_np, acc):
         success_2, a_2, T = tsocs_stage_2(a_1, pI_np, pF_np, vI_np, vF_np, Umax, Tmax)
 
 
-        # plan_0 = []
-        # for t in range(0, 21, 1):
-        #     values = get_vel_pos(pI_np, vI_np, a_0, Umax, Tmax/20*t)
-        #     plan_0.append(values[1])
-        # draw_tocorba_plan = {
-        #     "tocorba plan 0": {
-        #         "data": [
-        #             {
-        #                 "type": "line",
-        #                 "x_list": [p[0]*1000 for p in plan_0],
-        #                 "y_list": [-p[1]*1000 for p in plan_0],
-        #                 "color": "#FFFFFF",
-        #                 "width": 10,
-        #             },
-        #         ],
-        #         "is_visible": True,
-        #     }
-        # }
-        # s_draw.send_json(draw_tocorba_plan)
+        plan_0 = []
+        for t in range(0, 21, 1):
+            values = get_vel_pos(Tmax/20*t, pI_np, vI_np, a_0, Umax)
+            plan_0.append(values[1])
+        draw_tocorba_plan = {
+            "tocorba plan 0": {
+                "data": [
+                    {
+                        "type": "line",
+                        "x_list": [p[0]*1000 for p in plan_0],
+                        "y_list": [-p[1]*1000 for p in plan_0],
+                        "color": "#FFFFFF",
+                        "width": 10,
+                    },
+                ],
+                "is_visible": True,
+            }
+        }
+        s_draw.send_json(draw_tocorba_plan)
+
+        plan_1 = []
+        for t in range(0, 21, 1):
+            values = get_vel_pos(Tmax/20*t, pI_np, vI_np, a_1, Umax)
+            plan_1.append(values[1])
+        draw_tocorba_plan1 = {
+            "tocorba plan 1": {
+                "data": [
+                    {
+                        "type": "line",
+                        "x_list": [p[0]*1000 for p in plan_1],
+                        "y_list": [-p[1]*1000 for p in plan_1],
+                        "color": "#0000FF",
+                        "width": 10,
+                    },
+                ],
+                "is_visible": True,
+            }
+        }
+        s_draw.send_json(draw_tocorba_plan1)
 
         if success_2:
             tsocs_a = a_2
@@ -107,14 +118,16 @@ def update(pI_np, pF_np, vI_np, vF_np, acc):
         tsocs_a = a_2
         tsocs_T = T
 
+    print("TSOCS time = " + str(tsocs_T))
+
 
 def tsocs_stage_1(pI, pF, vI, vF, Umax):
     theta = math.atan2(pF[1] - pI[1], pF[0] - pI[0])
     T, ttX, signX = calc_1DOF_optimal_times_2(pI[0], pF[0], vI[0], vF[0], Umax)
     T, ttY, signY = calc_1DOF_optimal_times_2(pI[1], pF[1], vI[1], vF[1], Umax)
     a_0 = [1, -2, 3, -4]
-    a_0[2] = math.cos(theta)#*signX
-    a_0[3] = math.sin(theta)#*signY
+    a_0[2] = math.cos(theta)*signX
+    a_0[3] = math.sin(theta)*signY
     a_0[0] = -a_0[2]/ttX
     a_0[1] = -a_0[3]/ttY
     s1 = linalg.norm(pF - pI)/Umax - linalg.norm(vI**2 + vF**2)/(2*Umax**2)
@@ -129,10 +142,10 @@ def tsocs_stage_1(pI, pF, vI, vF, Umax):
         calc_cost_1, 
         a_0, 
         method="lm", 
-        max_nfev=50, 
-        ftol=1e-6, 
-        xtol=1e-6, 
-        gtol=1e-6, 
+        max_nfev=100, 
+        ftol=1e-8, 
+        xtol=1e-8, 
+        gtol=1e-8, 
         args=args,
         )
     return solution.success, a_0, solution.x, Tmax
@@ -145,10 +158,10 @@ def tsocs_stage_2(a_1, pI, pF, vI, vF, Umax, Tmax):
         calc_cost_2, 
         a_init, 
         method="lm", 
-        max_nfev=20, 
-        ftol=1e-15, 
-        xtol=1e-15, 
-        gtol=1e-15, 
+        max_nfev=200, 
+        ftol=1e-12, 
+        xtol=1e-12, 
+        gtol=1e-12, 
         args=args, 
         # bounds=(
         #     [-np.inf, -np.inf, -np.inf, -np.inf, 0], 
@@ -213,14 +226,14 @@ def get_vel_pos(t, xI, vI, a, Umax):
     a3 = a[2]
     a4 = a[3]
 
+    kEpsilonSq = 1e-30
     s1 = a1*a1 + a2*a2
     s13 = a3*a3 + a4*a4
     s10 = a1*a3 + a2*a4
     s2 = 2*t*s10 + s13
-    s7 = math.sqrt(t*t*s1 + s2)
+    s7 = math.sqrt(t*t*s1 + s2 + kEpsilonSq)
     s25 = math.sqrt(s1)
     s26 = math.sqrt(s13)
-    kEpsilonSq = 1e-30
     s30 = (s25*s7 + t*s1 + s10 + kEpsilonSq) / (s25*s26 + s10 + kEpsilonSq)
     if s30 <= 0:
         s24 = -1e30
