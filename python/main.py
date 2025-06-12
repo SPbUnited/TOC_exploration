@@ -73,14 +73,14 @@ elapsed2 = []
 
 # points = [np.array([-1.5, -0.12]), np.array([-1, 0.12]), np.array([-0.5, -0.12]), np.array([0, 0.12]), np.array([1, 0]), np.array([0, 1]), np.array([-3, 2])]
 # velocities = [np.array([0, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.2, 0]), np.array([0.3, 0.4]), np.array([0.3, 0.4]), np.array([-0.5, -0.2])]
-start_vel_x = 0.25
-start_vel_y = 1
-points = [np.array([0, 0]), np.array([0.5, 0.5]), np.array([0.5, -0.5])]
-velocities = [np.array([0.0, 0]), np.array([0.5, 0]), np.array([-0.5, 0])]
+start_vel_x = 0
+start_vel_y = 0.5
+points = [np.array([0, 0]), np.array([1, 0])]
+velocities = [np.array([0, 0.5]), np.array([0.5, 0])]
 current_start = 0
 current_goal = 1
 
-EPS = 0.1
+EPS = 0.05
 alpha = 0.7
 COORD_EPS = 0.05
 SPEED_EPS = 0.5
@@ -90,18 +90,18 @@ trajectory_max_len = 50
 trajectory_update_int = 1
 update_counter: int = 0
 
-MAX_ACC = 0.5
+MAX_ACC = 0.4
 MAX_VEL = 1
 
-tsocs.tsocs_params = {"B_MIN": 0.1,
-                      "K1": 20,
+tsocs.tsocs_params = {"B_MIN": 0.05,
+                      "K1": 50,
                       "K2": 0.1,
                       "T_K_reg": 1.4}
 
 BOT_NUMBER = 0
 
-PLANER_FREQ     = 1
-CONTROLLER_FREQ = 100
+PLANER_FREQ     = 2
+CONTROLLER_FREQ = 50
 
 BANGBANG_PLANNER    = 0
 TSOCS_PLANNER       = 1
@@ -112,10 +112,10 @@ trjUpdateTimer = time.time()
 
 FF_Kp = 1
 
-TIME_K = 150/500
+TIME_K = 500/500
 
 dT = 1/CONTROLLER_FREQ
-dT_K = 7
+dT_K = 3
 
 x = 0
 y = 0
@@ -315,6 +315,7 @@ def update_vision():
         else:
             current_start = current_goal
             current_goal = (current_goal + 1)%len(points)
+            update_trajectory()
 
     update_counter += 1
     if update_counter > trajectory_update_int:
@@ -395,10 +396,10 @@ def update_control():
                 id=0,
                 move_command=rcm.RobotMoveCommand(
                     local_velocity=rcm.MoveLocalVelocity(
-                        # forward=float(req_vel_x/TIME_K),
-                        # left=float(req_vel_y/TIME_K),
-                        forward=float(0.5),
-                        left=float(0),
+                        forward=float(req_vel_x/TIME_K),
+                        left=float(req_vel_y/TIME_K),
+                        # forward=float(1),
+                        # left=float(0),
                         angular=float(req_vel_w),
                     ),
                 ),
@@ -430,7 +431,10 @@ def planner():
         planner_timer = time.time()
         
         print("planer: ")
-        update_trajectory()
+        try:
+            update_trajectory()
+        except:
+            print("tyajelo")
 
         time.sleep(max(0, 1/PLANER_FREQ  - (time.time() - planner_timer)))
 
@@ -443,11 +447,14 @@ def controller():
         while True:
             controller_timer = time.time()
 
-            print("controller: ")
-            update_vision()
-            # update_trajectory()
-            update_control()
-            csvwriter.writerow([time.time() - program_start_time, x, y])
+            try:
+                print("controller: ")
+                update_vision()
+                # update_trajectory()
+                update_control()
+                csvwriter.writerow([time.time() - program_start_time, x, y])
+            except:
+                print("tyajelo")
 
             time.sleep(max(0, 1/CONTROLLER_FREQ - (time.time() - controller_timer)))
 

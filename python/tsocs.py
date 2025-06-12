@@ -126,8 +126,8 @@ def tsocs_stage_1(pI, pF, vI, vF, Umax):
     T, ttX, signX = calc_1DOF_optimal_times_2(pI[0], pF[0], vI[0], vF[0], Umax)
     T, ttY, signY = calc_1DOF_optimal_times_2(pI[1], pF[1], vI[1], vF[1], Umax)
     a_0 = [1, -2, 3, -4]
-    a_0[2] = math.cos(theta)*signX
-    a_0[3] = math.sin(theta)*signY
+    a_0[2] = math.cos(theta)#*signX
+    a_0[3] = math.sin(theta)#*signY
     a_0[0] = -a_0[2]/ttX
     a_0[1] = -a_0[3]/ttY
     s1 = linalg.norm(pF - pI)/Umax - linalg.norm(vI**2 + vF**2)/(2*Umax**2)
@@ -158,7 +158,7 @@ def tsocs_stage_2(a_1, pI, pF, vI, vF, Umax, Tmax):
         calc_cost_2, 
         a_init, 
         method="lm", 
-        max_nfev=200, 
+        max_nfev=100, 
         ftol=1e-12, 
         xtol=1e-12, 
         gtol=1e-12, 
@@ -232,8 +232,8 @@ def get_vel_pos(t, xI, vI, a, Umax):
     s10 = a1*a3 + a2*a4
     s2 = 2*t*s10 + s13
     s7 = math.sqrt(t*t*s1 + s2 + kEpsilonSq)
-    s25 = math.sqrt(s1)
-    s26 = math.sqrt(s13)
+    s25 = math.sqrt(s1 + kEpsilonSq)
+    s26 = math.sqrt(s13 + kEpsilonSq)
     s30 = (s25*s7 + t*s1 + s10 + kEpsilonSq) / (s25*s26 + s10 + kEpsilonSq)
     if s30 <= 0:
         s24 = -1e30
