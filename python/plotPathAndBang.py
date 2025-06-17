@@ -9,7 +9,7 @@ with open('path.csv', newline='') as csvfile:
     path_x = []
     path_y = []
     for line in csvreader:
-        if float(line[0]) > 24.17 and float(line[0]) < 33:
+        if float(line[0]) > 57.33 and float(line[0]) < 67.33:
             path_x.append(float(line[1]))
             path_y.append(float(line[2]))
 

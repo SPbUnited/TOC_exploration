@@ -100,27 +100,30 @@ tsocs.tsocs_params = {"B_MIN": 0.05,
 
 BOT_NUMBER = 0
 
-PLANER_FREQ     = 2
+PLANER_FREQ     = 0.1
 CONTROLLER_FREQ = 50
 
 BANGBANG_PLANNER    = 0
 TSOCS_PLANNER       = 1
-planner_type = BANGBANG_PLANNER
+planner_type = TSOCS_PLANNER
 
 preTrjUpdateTimer = time.time()
 trjUpdateTimer = time.time()
 
 FF_Kp = 1
 
-TIME_K = 500/500
+TIME_K = 1000/1000
 
 dT = 1/CONTROLLER_FREQ
-dT_K = 3
+dT_K = 1
 
 x = 0
 y = 0
 vel_x = 0
 vel_y = 0
+
+trjX = 0
+trjY = 0
 
 def update_trajectory():
     print("start")
@@ -316,6 +319,7 @@ def update_vision():
             current_start = current_goal
             current_goal = (current_goal + 1)%len(points)
             update_trajectory()
+            planner_timer = time.time()
 
     update_counter += 1
     if update_counter > trajectory_update_int:
@@ -378,6 +382,10 @@ def update_control():
         acc, vel, coord = bangbang.get_bang_bang_values(t)
     elif planner_type == TSOCS_PLANNER:
         vel, coord = tsocs.get_vel_pos_t(t)
+
+    global trjX, trjY
+    trjX = coord[0]
+    trjY = coord[1]
 
     if current_goal == current_start:
         req_vel_x = start_vel_x*math.cos(angle) + start_vel_y*math.sin(angle)
@@ -452,7 +460,7 @@ def controller():
                 update_vision()
                 # update_trajectory()
                 update_control()
-                csvwriter.writerow([time.time() - program_start_time, x, y])
+                csvwriter.writerow([time.time() - program_start_time, x, y, trjX, trjY])
             except:
                 print("tyajelo")
 
